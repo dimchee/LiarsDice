@@ -1,0 +1,37 @@
+cabal-version: 3.4
+name:          LiarsDice
+version:       0.1.0.0
+
+--   http://haskell.org/cabal/users-guide/
+license:       MIT
+license-file:  LICENSE
+author:        dimchee
+maintainer:    dimchee90@gmail.com
+build-type:    Simple
+
+common warnings
+    ghc-options: -Wall
+
+executable LiarsDice
+    import:           warnings
+    main-is:          Main.hs
+
+    -- Modules included in this executable, other than Main.
+    other-modules:
+        Simulation
+
+    -- LANGUAGE extensions used by modules in this package.
+    other-extensions: OverloadedStrings
+    build-depends:
+        , aeson
+        , base            ^>=4.16.4.0
+        , bytestring
+        , containers
+        , lens
+        , monad-loops
+        , network-simple
+        , random
+        , stm
+
+    hs-source-dirs:   Src
+    default-language: GHC2021
