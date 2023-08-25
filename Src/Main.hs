@@ -10,7 +10,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM
 import Control.Lens hiding ((.=))
-import Control.Monad (MonadPlus (mzero), forever)
+import Control.Monad (MonadPlus (mzero), forever, replicateM)
 import Control.Monad.Loops (unfoldM)
 import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
@@ -20,13 +20,14 @@ import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Monoid (Sum (..))
 import Data.Set qualified as Set
+import Debug.Trace (trace)
 import Network.Simple.TCP
 import Simulation
 import System.Random
 import System.Timeout (timeout)
 import Prelude hiding (round)
 
-type HandId = Int
+type HandId = String
 
 stringMove :: String -> Data.Aeson.Types.Parser Move
 stringMove x = case x of
@@ -77,12 +78,12 @@ serverResponse game handId playerId = do
                     in
                     (fromEnum $ value bid, count bid)
             , "last_bidder" .= head (playingOrder game)
-            , "last_loser" .= getSum (game ^. rounds . _head . loser . to Sum)
-            , "last_challenger" .= getSum (game ^. rounds . _head . hands . _head . _Challenger . to Sum)
+            , "last_loser" .= (game ^. rounds . _head . loser)
+            , "last_challenger" .= (game ^. rounds . _head . hands . _head . _Challenger)
             ]
 
 turn :: Communication -> PlayerId -> Socket -> IO ()
-turn comm playerId soc = do
+turn comm playerId soc = forever $ do
     (handId, game) <- atomically $ readTChan $ comm ^. nextMoveChan
     sendLazy soc $ serverResponse game handId playerId
     clientResponse <- timeout (3 * 1000000) (recv soc 1024) -- TODO magic numbers
@@ -119,7 +120,7 @@ simulate comm = do
     -- TODO magic number 5
     tVarGame <- newTVarIO $ newGame 5 players
     forever $ do
-        handId <- randomRIO (0, 1000000)
+        handId <- replicateM 8 $ randomRIO ('0', '9')
         game <- readTVarIO tVarGame
         atomically $ writeTChan (comm ^. nextMoveChan) (handId, game)
         responses <- collectResponses handId (length (playingOrder game)) $ comm ^. respChan
@@ -145,7 +146,7 @@ main = do
     serve (Host "localhost") "8888" $ \(soc, _) -> do
         -- putStrLn $ "Player connected: " ++ show remoteAddr
         -- TODO playerId should be conncted to other stuff
-        playerId <- randomRIO (0, 1000000)
+        playerId <- replicateM 8 $ randomRIO ('a', 'z')
         atomically $ writeTChan (communication ^. playerQueue) $ Just playerId
         userCom <- userCommunication communication
         turn userCom playerId soc

@@ -43,7 +43,7 @@ data Move
     deriving (Generic, Show)
 makePrisms ''Move
 
-type PlayerId = Int
+type PlayerId = String
 
 data Hand = Challenger PlayerId | MakeBid Bid | Invalid PlayerId
 makePrisms ''Hand
@@ -96,7 +96,7 @@ newRound diceCounts =
         , _hands = []
         , _dices = generateDices diceCounts
         , -- TODO should change somehow
-          _loser = 0
+          _loser = "No Loser"
         }
 
 newGame :: Count -> [PlayerId] -> Game
@@ -131,7 +131,9 @@ isChallenge =
         )
 
 takeDice :: PlayerId -> Map.Map PlayerId Dices -> Map.Map PlayerId Count
-takeDice player = (at player %~ fmap (\x -> x - 1)) . (each %~ (fromIntegral . length))
+takeDice player =
+    (at player %~ maybe Nothing (\x -> if x > 1 then Just $ x - 1 else Nothing))
+        . (each %~ (fromIntegral . length))
 
 bidValid :: Bid -> Map.Map PlayerId Dices -> Bool
 bidValid bid m = (length . filter (== value bid) . concatMap snd . Map.toList) m >= fromIntegral (count bid)

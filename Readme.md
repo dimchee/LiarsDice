@@ -26,9 +26,9 @@ We use `TypeScript` notation for `JSON` specification:
 ```ts
 type Integer = number;
 type Ordinal = Integer; // starting from 1
-type PlayerID = Integer;
-type NotAvailable = 0;
-type Yourself = 0;
+type PlayerID = string;
+type Yourself = "";
+type NotAvailable = "";
 type Face = 1 | 2 | 3 | 4 | 5 | 6;
 type Count = Integer;
 type Bid = [Face, Count];
@@ -39,7 +39,7 @@ type EmptyBid = [0, 0];
 
 ```ts
 export interface outbound {
-    message_id: Integer;
+    message_id: string;
     game_number: Ordinal;
     round_number: Ordinal;
     move_number: Ordinal;
