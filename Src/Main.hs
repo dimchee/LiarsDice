@@ -69,14 +69,17 @@ serverResponse game handId playerId = do
             , "round_number" .= getSum (game ^. rounds . _head . roundNumber . to Sum)
             , "move_number" .= getSum (game ^. handNumber)
             , "your_hand" .= maybe [] (map $ (+ 1) . fromEnum) (game ^. rounds . _head . dices . at playerId)
-            , -- TODO Change Your id to 0
-              "other_hands" .= Map.toList (game ^. rounds . _head . dices & each %~ length)
+            , "other_hands"
+                .= ( game ^. rounds . _head . dices . to Map.toList
+                        & (each . _2 %~ length)
+                        & (each . filtered ((== playerId) . fst) . _1 .~ "yourself")
+                   )
             , "last_move" .= ("first_move" :: String)
             , "last_bid"
-                .= let
-                    bid = (game ^. rounds . _head . hands . _head . _MakeBid)
-                    in
-                    (fromEnum $ value bid, count bid)
+                .= maybe
+                    (0, 0)
+                    (\bid -> (fromEnum $ value bid, count bid))
+                    (game ^? rounds . _head . hands . _head . _MakeBid)
             , "last_bidder" .= head (playingOrder game)
             , "last_loser" .= (game ^. rounds . _head . loser)
             , "last_challenger" .= (game ^. rounds . _head . hands . _head . _Challenger)

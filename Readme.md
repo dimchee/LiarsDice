@@ -27,8 +27,6 @@ We use `TypeScript` notation for `JSON` specification:
 type Integer = number;
 type Ordinal = Integer; // starting from 1
 type PlayerID = string;
-type Yourself = "";
-type NotAvailable = "";
 type Face = 1 | 2 | 3 | 4 | 5 | 6;
 type Count = Integer;
 type Bid = [Face, Count];
@@ -44,12 +42,12 @@ export interface outbound {
     round_number: Ordinal;
     move_number: Ordinal;
     your_hand: Face[];
-    other_hands: [PlayerID | Yourself, Count][]; // sorted by playing order
+    other_hands: [PlayerID | "yourself", Count][]; // sorted by playing order
     last_move: "first_move" | "bid_made" | "challenge_made" | "invalid_move";
     last_bid: Bid | EmptyBid;
-    last_bidder: PlayerID | NotAvailable;
-    last_loser: PlayerID | NotAvailable;
-    last_challenger: PlayerID | NotAvailable;
+    last_bidder: PlayerID | "not_available";
+    last_loser: PlayerID | "not_available";
+    last_challenger: PlayerID | "not_available";
 }
 ```
 
