@@ -4,23 +4,22 @@
 
 module Main where
 
--- fromMaybe
+-- import Debug.Trace (trace)
 
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM
 import Control.Lens hiding ((.=))
 import Control.Monad (MonadPlus (mzero), forever, replicateM)
-import Control.Monad.Loops (unfoldM)
+import Control.Monad.Loops (iterateWhile, unfoldM)
 import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
 import Data.Aeson.Types qualified
 import Data.ByteString.Lazy (ByteString)
+import Data.Either (isRight)
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
-import Data.Monoid (Sum (..))
 import Data.Set qualified as Set
-import Debug.Trace (trace)
 import Network.Simple.TCP
 import Simulation
 import System.Random
@@ -55,22 +54,22 @@ instance FromJSON ClientResponse where
 
 data Communication = Communication
     { _respChan :: TChan (PlayerId, ClientResponse)
-    , _nextMoveChan :: TChan (HandId, Game)
+    , _nextMoveChan :: TChan (HandId, Arena)
     , _playerQueue :: TChan (Maybe PlayerId)
     }
 makeLenses ''Communication
 
-serverResponse :: Game -> HandId -> PlayerId -> ByteString
-serverResponse game handId playerId = do
+serverResponse :: Arena -> HandId -> PlayerId -> ByteString
+serverResponse arena handId playerId = do
     JSON.encode $
         JSON.object
             [ "message_id" .= handId
-            , "game_number" .= (game ^. gameNumber)
-            , "round_number" .= getSum (game ^. rounds . _head . roundNumber . to Sum)
-            , "move_number" .= getSum (game ^. handNumber)
-            , "your_hand" .= maybe [] (map $ (+ 1) . fromEnum) (game ^. rounds . _head . dices . at playerId)
+            , "game_number" .= (arena ^. finishedGames . to length)
+            , "round_number" .= (game ^. finished . to length)
+            , "move_number" .= (round ^. bids . to length)
+            , "your_hand" .= maybe [] (map $ (+ 1) . fromEnum) (round ^. dices . at playerId)
             , "other_hands"
-                .= ( game ^. rounds . _head . dices . to Map.toList
+                .= ( round ^. dices . to Map.toList
                         & (each . _2 %~ length)
                         & (each . filtered ((== playerId) . fst) . _1 .~ "yourself")
                    )
@@ -79,11 +78,15 @@ serverResponse game handId playerId = do
                 .= maybe
                     (0, 0)
                     (\bid -> (fromEnum $ value bid, count bid))
-                    (game ^? rounds . _head . hands . _head . _MakeBid)
-            , "last_bidder" .= head (playingOrder game)
-            , "last_loser" .= (game ^. rounds . _head . loser)
-            , "last_challenger" .= (game ^. rounds . _head . hands . _head . _Challenger)
+                    (round ^? bids . _head)
+            , "last_bidder" .= notAvailable (round ^? to playingOrder . _head)
+            , "last_loser" .= notAvailable (game ^? finished . _head . loser)
+            , "last_challenger" .= notAvailable (game ^? finished . _head . roundEnd . _Challenger)
             ]
+  where
+    game = arena ^. runningGame
+    round = game ^. running
+    notAvailable = fromMaybe "not_available"
 
 turn :: Communication -> PlayerId -> Socket -> IO ()
 turn comm playerId soc = forever $ do
@@ -121,15 +124,22 @@ simulate comm = do
     players <- atomically $ unfoldM (readTChan $ comm ^. playerQueue)
     putStrLn $ "Starting simulation. Connected players: " ++ show players
     -- TODO magic number 5
-    tVarGame <- newTVarIO $ newGame 5 players
-    forever $ do
+    tVarArena <- newTVarIO $ newArena 5 players
+    winner <- iterateWhile isRight $ do
         handId <- replicateM 8 $ randomRIO ('0', '9')
-        game <- readTVarIO tVarGame
-        atomically $ writeTChan (comm ^. nextMoveChan) (handId, game)
-        responses <- collectResponses handId (length (playingOrder game)) $ comm ^. respChan
+        arena <- readTVarIO tVarArena
+        atomically $ writeTChan (comm ^. nextMoveChan) (handId, arena)
+        let activePlayers = arena ^. runningGame . running . to playingOrder . to length
+        responses <- collectResponses handId activePlayers $ comm ^. respChan
         putStrLn $ "Ending round... responses: " ++ show responses
         -- randomId <- randomIO
-        atomically $ modifyTVar tVarGame (step responses)
+        let res = step responses arena
+        atomically $ case res of
+            Right a ->
+                writeTVar tVarArena a
+            _ -> pure ()
+        pure res
+    putStrLn $ "Winner: " ++ (winner ^. _Left)
 
 newCommunication :: IO Communication
 newCommunication =
