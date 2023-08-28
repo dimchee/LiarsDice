@@ -15,40 +15,41 @@ import Control.Monad.Loops (iterateWhile, unfoldM)
 import Control.Monad.Random
 import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
-import Data.Aeson.Types qualified
 import Data.ByteString.Lazy (ByteString)
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
+import GHC.Generics (Generic)
 import Network.Simple.TCP
 import Simulation
 import System.Timeout (timeout)
 import Prelude hiding (round)
 
-type HandId = String
-
-stringMove :: String -> Data.Aeson.Types.Parser Move
-stringMove x = case x of
-    "pass" -> pure Pass'
-    "challenge" -> pure Challenge'
-    s -> fail $ "Should be one of 'challenge' or 'pass', not: '" <> s <> "'"
-
-bidMove :: (Int, Int) -> Move
-bidMove (face, count) = Bid' $ Bid{count = fromIntegral count, value = toEnum $ face - 1}
+newtype MoveId = MoveId String deriving (Generic, Show, FromJSON, Eq)
+randomMoveId :: IO MoveId
+randomMoveId = MoveId <$> replicateM 8 (randomRIO ('0', '9'))
 
 data ClientResponse
-    = ClientResponse HandId Move
+    = ClientResponse MoveId Move
     | JsonError
     | TimedOut
     | EndOfInput
     deriving (Show)
 makePrisms ''ClientResponse
+
 instance FromJSON ClientResponse where
     parseJSON (JSON.Object o) =
         ClientResponse
             <$> o
             .: "message_id"
             <*> ((o .: "move" >>= stringMove) <|> (bidMove <$> o .: "move"))
+      where
+        stringMove x = case x of
+            "pass" -> pure Pass'
+            "challenge" -> pure Challenge'
+            s -> fail $ "Should be one of 'challenge' or 'pass', not: '" <> s <> "'"
+        bidMove :: (Int, Int) -> Move
+        bidMove (face, count) = Bid' $ Bid{count = fromIntegral count, value = toEnum $ face - 1}
     parseJSON _ = mzero
 
 data Arena = Arena
@@ -61,16 +62,24 @@ newArena diceNumber players = Arena [] <$> newGame diceNumber players
 
 data Communication = Communication
     { _respChan :: TChan (PlayerId, ClientResponse)
-    , _nextMoveChan :: TChan (HandId, Arena)
+    , _nextMoveChan :: TChan (MoveId, Arena)
     , _playerQueue :: TChan (Maybe PlayerId)
     }
 makeLenses ''Communication
+newCommunication :: IO Communication
+newCommunication =
+    Communication <$> newTChanIO <*> newTChanIO <*> newTChanIO
 
-serverResponse :: Arena -> HandId -> PlayerId -> ByteString
-serverResponse arena handId playerId = do
+userCommunication :: Communication -> IO Communication
+userCommunication com = do
+    nextMove <- atomically $ dupTChan (com ^. nextMoveChan)
+    pure $ com & nextMoveChan .~ nextMove
+
+serverResponse :: Arena -> MoveId -> PlayerId -> ByteString
+serverResponse arena moveId playerId = do
     JSON.encode $
         JSON.object
-            [ "message_id" .= handId
+            [ "message_id" .= unwrapMove moveId
             , "game_number" .= (arena ^. finishedGames . to length)
             , "round_number" .= (game ^. finished . to length)
             , "move_number" .= (round ^. bids . to length)
@@ -94,14 +103,15 @@ serverResponse arena handId playerId = do
   where
     game = arena ^. runningGame
     round = game ^. running
+    unwrapMove (MoveId m) = m
     unwrap (PlayerId p) = p
     yourself = PlayerId "yourself"
     maybeNotAvailable = maybe "not_available" unwrap
 
 turn :: Communication -> PlayerId -> Socket -> IO ()
 turn comm playerId soc = forever $ do
-    (handId, game) <- atomically $ readTChan $ comm ^. nextMoveChan
-    sendLazy soc $ serverResponse game handId playerId
+    (moveId, game) <- atomically $ readTChan $ comm ^. nextMoveChan
+    sendLazy soc $ serverResponse game moveId playerId
     clientResponse <- timeout (3 * 1000000) (recv soc 1024) -- TODO magic numbers
     -- putStrLn $ "Player responded: " ++ show clientResponse
     atomically $
@@ -111,8 +121,8 @@ turn comm playerId soc = forever $ do
             , maybe TimedOut (maybe EndOfInput (fromMaybe JsonError . JSON.decodeStrict)) clientResponse
             )
 
-collectResponses :: HandId -> Int -> TChan (PlayerId, ClientResponse) -> IO (Map.Map PlayerId Move)
-collectResponses handId nrPlayers respCh = go Set.empty Map.empty
+collectResponses :: MoveId -> Int -> TChan (PlayerId, ClientResponse) -> IO (Map.Map PlayerId Move)
+collectResponses moveId nrPlayers respCh = go Set.empty Map.empty
   where
     go ids resps = do
         if Set.size ids == nrPlayers
@@ -123,7 +133,7 @@ collectResponses handId nrPlayers respCh = go Set.empty Map.empty
                 go (Set.insert playerId ids) $ addResp playerId response resps
     addResp :: PlayerId -> ClientResponse -> Map.Map PlayerId Move -> Map.Map PlayerId Move
     addResp playerId resp resps =
-        if resp ^? _ClientResponse . _1 == Just handId
+        if resp ^? _ClientResponse . _1 == Just moveId
             then resps & at playerId .~ (resp ^? _ClientResponse . _2)
             else resps
 
@@ -137,11 +147,11 @@ simulate comm = do
     initialArena <- evalRandIO $ newArena 5 players
     tVarArena <- newTVarIO initialArena
     _ <- iterateWhile (is _Running) $ do
-        handId <- replicateM 8 $ randomRIO ('0', '9')
+        moveId <- randomMoveId
         arena <- readTVarIO tVarArena
-        atomically $ writeTChan (comm ^. nextMoveChan) (handId, arena)
+        atomically $ writeTChan (comm ^. nextMoveChan) (moveId, arena)
         let activePlayers = arena ^. runningGame . running . to playingOrder . to length
-        responses <- collectResponses handId activePlayers $ comm ^. respChan
+        responses <- collectResponses moveId activePlayers $ comm ^. respChan
         putStrLn $ "Ending round... responses: " ++ show responses
         -- randomId <- randomIO
         status <- evalRandIO $ arena ^. runningGame . to (step responses)
@@ -149,15 +159,6 @@ simulate comm = do
         putStrLn $ "Winner: " ++ show (status ^? _Finished . _2)
         pure status
     pure ()
-
-newCommunication :: IO Communication
-newCommunication =
-    Communication <$> newTChanIO <*> newTChanIO <*> newTChanIO
-
-userCommunication :: Communication -> IO Communication
-userCommunication com = do
-    nextMove <- atomically $ dupTChan (com ^. nextMoveChan)
-    pure $ com & nextMoveChan .~ nextMove
 
 main :: IO ()
 main = do
