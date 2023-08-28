@@ -5,45 +5,25 @@
 -- TODO delete this option
 {-# OPTIONS_GHC -Wno-missing-methods #-}
 
-module Simulation (
-    Move (..),
-    Bid (..),
-    PlayerId,
-    Arena,
-    moveNumber,
-    playingOrder,
-    dices,
-    loser,
-    _Challenger,
-    _Pass',
-    _Challenge',
-    _Bid',
-    finishedGames,
-    runningGame,
-    finished,
-    running,
-    bids,
-    roundEnd,
-    newArena,
-    step,
-) where
+module Simulation where
 
 import Control.Applicative (Alternative (..))
 import Control.Lens
 import Control.Lens.Extras (is)
+import Control.Monad.Random
 import Data.Map qualified as Map
 import Data.Maybe
 import Data.Monoid (Sum (..))
 import GHC.Generics (Generic)
 import GHC.Natural
-import System.Random
+import System.Random.Shuffle (shuffleM)
 import Prelude hiding (round)
 
-type PlayerId = String
+newtype PlayerId = PlayerId String deriving (Show, Eq, Ord)
 type Count = Natural
 data Face = One | Two | Three | Four | Five | Six
     deriving (Eq, Ord, Enum, Generic, Show, Uniform, UniformRange, Random)
-type Dices = [Face]
+type Dice = [Face]
 
 data Bid = Bid
     { count :: Count
@@ -62,7 +42,7 @@ data RoundEnd = Challenger PlayerId | Invalid PlayerId
 makePrisms ''RoundEnd
 data Round = Round
     { _initialPlayingOrder :: [PlayerId]
-    , _dices :: Map.Map PlayerId Dices
+    , _dices :: Map.Map PlayerId Dice
     , _bids :: [Bid]
     }
 makeLenses ''Round
@@ -80,30 +60,22 @@ data Game = Game
     }
 makeLenses ''Game
 
-data Arena = Arena
-    { _finishedGames :: [Game]
-    , _runningGame :: Game
-    }
-makeLenses ''Arena
+-- data Status m end = Running m | Finished m end
+data Status = Running Game | Finished Game PlayerId
+makePrisms ''Status
 
--- randomPlayer :: IO Player
--- randomPlayer = do
---     dices <- replicateM 5 randomIO
---     playerId <- randomIO
---     pure $ Player{playerId = playerId, dices = dices}
+getGame :: Status -> Game
+getGame stats = case stats of
+    Running game -> game
+    Finished game _ -> game
 
--- TODO shuffle playingOrder
-newRound :: Map.Map PlayerId Count -> Round
-newRound diceCounts =
-    Round
-        { _initialPlayingOrder = Map.keys diceCounts
-        , _dices = generateDices diceCounts
-        , _bids = []
-        }
-newGame :: Count -> [PlayerId] -> Game
-newGame diceNumber players = Game [] $ newRound $ Map.fromList $ (,diceNumber) <$> players
-newArena :: Count -> [PlayerId] -> Arena
-newArena diceNumber players = Arena [] $ newGame diceNumber players
+generateDice :: Map.Map PlayerId Count -> Rand StdGen (Map.Map PlayerId Dice)
+generateDice = mapM (\x -> replicateM (fromIntegral x) getRandom)
+newRound :: Map.Map PlayerId Count -> Rand StdGen Round
+newRound diceCounts = Round <$> shuffleM (Map.keys diceCounts) <*> generateDice diceCounts <*> pure []
+
+newGame :: Count -> [PlayerId] -> Rand StdGen Game
+newGame diceNumber players = Game [] <$> newRound (Map.fromList $ (,diceNumber) <$> players)
 
 moveNumber :: Round -> Sum Int
 moveNumber round = round ^. bids . to length . to Sum
@@ -114,17 +86,23 @@ rotate (Sum n) as = ys ++ xs
   where
     (xs, ys) = splitAt (n `mod` length as) as
 
--- TODO Make generation random
-generateDices :: Map.Map PlayerId Count -> Map.Map PlayerId Dices
-generateDices = Map.map (\x -> replicate (fromIntegral x) One)
-
-finishRound :: RoundEnd -> Game -> Game
-finishRound end game =
-    game
-        & (finished %~ cons finishedRound)
-        & (running .~ newRoundPunished)
+finishRound :: RoundEnd -> Game -> Rand StdGen Game
+finishRound end game = do
+    newRoundPunished <-
+        newRound $
+            game ^. running . dices
+                & (each %~ (fromIntegral . length))
+                & (at loser_ %~ maybe Nothing (\x -> if x > 1 then Just $ x - 1 else Nothing))
+    pure $
+        game
+            & (finished %~ cons finishedRound)
+            & (running .~ newRoundPunished)
   where
     bidValid bid =
+        -- case bid of
+        -- Nothing -> True
+        -- Just (Bid _ val) ->
+        --     game ^.. running . dices . filtered ()
         (game ^. running . dices . to (length . filter (\x -> maybe False (\b -> x == value b) bid) . concatMap snd . Map.toList))
             >= fromIntegral (maybe 0 count bid)
     loser_ =
@@ -133,28 +111,22 @@ finishRound end game =
             Challenger p ->
                 if bidValid (game ^? running . bids . _head)
                     then p
-                    else game ^. running . to playingOrder . _head
+                    else fromMaybe (PlayerId "No players?") $ game ^? running . to playingOrder . _head
     finishedRound = RoundFinished end loser_ -- \$ game ^. running
-    newRoundPunished =
-        newRound $
-            game ^. running . dices
-                & (each %~ (fromIntegral . length))
-                & (at loser_ %~ maybe Nothing (\x -> if x > 1 then Just $ x - 1 else Nothing))
 
-step :: Map.Map PlayerId Move -> Arena -> Either PlayerId Arena
-step moves arena =
-    if arena' ^. runningGame . running . to playingOrder . to length == 1
-        then Left $ fromMaybe "Imposible!" (arena' ^? runningGame . running . to playingOrder . _head)
-        else Right arena'
-  where
-    arena' = arena & runningGame %~ stepGame moves
+step :: Map.Map PlayerId Move -> Game -> Rand StdGen Status
+step moves game = do
+    game' <- stepGame moves game
+    pure $ case game' ^. running . to playingOrder of
+        [winner] -> Finished game' winner
+        _ -> Running game'
 
-stepGame :: Map.Map PlayerId Move -> Game -> Game
+stepGame :: Map.Map PlayerId Move -> Game -> Rand StdGen Game
 stepGame moves game = case maybeRoundEnd of
     Just end ->
         finishRound end game
     Nothing ->
-        game & running . bids %~ cons bid
+        pure $ game & running . bids %~ cons bid
   where
     -- Player on turn can't pass, others can't bid
     sorted =

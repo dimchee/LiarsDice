@@ -10,19 +10,18 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM
 import Control.Lens hiding ((.=))
-import Control.Monad (MonadPlus (mzero), forever, replicateM)
+import Control.Lens.Extras (is)
 import Control.Monad.Loops (iterateWhile, unfoldM)
+import Control.Monad.Random
 import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
 import Data.Aeson.Types qualified
 import Data.ByteString.Lazy (ByteString)
-import Data.Either (isRight)
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Network.Simple.TCP
 import Simulation
-import System.Random
 import System.Timeout (timeout)
 import Prelude hiding (round)
 
@@ -52,6 +51,14 @@ instance FromJSON ClientResponse where
             <*> ((o .: "move" >>= stringMove) <|> (bidMove <$> o .: "move"))
     parseJSON _ = mzero
 
+data Arena = Arena
+    { _finishedGames :: [Game]
+    , _runningGame :: Game
+    }
+makeLenses ''Arena
+newArena :: Count -> [PlayerId] -> Rand StdGen Arena
+newArena diceNumber players = Arena [] <$> newGame diceNumber players
+
 data Communication = Communication
     { _respChan :: TChan (PlayerId, ClientResponse)
     , _nextMoveChan :: TChan (HandId, Arena)
@@ -71,7 +78,8 @@ serverResponse arena handId playerId = do
             , "other_hands"
                 .= ( round ^. dices . to Map.toList
                         & (each . _2 %~ length)
-                        & (each . filtered ((== playerId) . fst) . _1 .~ "yourself")
+                        & (each . filtered ((== playerId) . fst) . _1 .~ yourself)
+                        & (each . _1 %~ unwrap)
                    )
             , "last_move" .= ("first_move" :: String)
             , "last_bid"
@@ -79,14 +87,16 @@ serverResponse arena handId playerId = do
                     (0, 0)
                     (\bid -> (fromEnum $ value bid, count bid))
                     (round ^? bids . _head)
-            , "last_bidder" .= notAvailable (round ^? to playingOrder . _head)
-            , "last_loser" .= notAvailable (game ^? finished . _head . loser)
-            , "last_challenger" .= notAvailable (game ^? finished . _head . roundEnd . _Challenger)
+            , "last_bidder" .= maybeNotAvailable (round ^? to playingOrder . _head)
+            , "last_loser" .= maybeNotAvailable (game ^? finished . _head . loser)
+            , "last_challenger" .= maybeNotAvailable (game ^? finished . _head . roundEnd . _Challenger)
             ]
   where
     game = arena ^. runningGame
     round = game ^. running
-    notAvailable = fromMaybe "not_available"
+    unwrap (PlayerId p) = p
+    yourself = PlayerId "yourself"
+    maybeNotAvailable = maybe "not_available" unwrap
 
 turn :: Communication -> PlayerId -> Socket -> IO ()
 turn comm playerId soc = forever $ do
@@ -124,8 +134,9 @@ simulate comm = do
     players <- atomically $ unfoldM (readTChan $ comm ^. playerQueue)
     putStrLn $ "Starting simulation. Connected players: " ++ show players
     -- TODO magic number 5
-    tVarArena <- newTVarIO $ newArena 5 players
-    winner <- iterateWhile isRight $ do
+    initialArena <- evalRandIO $ newArena 5 players
+    tVarArena <- newTVarIO initialArena
+    _ <- iterateWhile (is _Running) $ do
         handId <- replicateM 8 $ randomRIO ('0', '9')
         arena <- readTVarIO tVarArena
         atomically $ writeTChan (comm ^. nextMoveChan) (handId, arena)
@@ -133,13 +144,11 @@ simulate comm = do
         responses <- collectResponses handId activePlayers $ comm ^. respChan
         putStrLn $ "Ending round... responses: " ++ show responses
         -- randomId <- randomIO
-        let res = step responses arena
-        atomically $ case res of
-            Right a ->
-                writeTVar tVarArena a
-            _ -> pure ()
-        pure res
-    putStrLn $ "Winner: " ++ (winner ^. _Left)
+        status <- evalRandIO $ arena ^. runningGame . to (step responses)
+        atomically $ writeTVar tVarArena (arena & runningGame .~ getGame status)
+        putStrLn $ "Winner: " ++ show (status ^? _Finished . _2)
+        pure status
+    pure ()
 
 newCommunication :: IO Communication
 newCommunication =
@@ -159,7 +168,7 @@ main = do
     serve (Host "localhost") "8888" $ \(soc, _) -> do
         -- putStrLn $ "Player connected: " ++ show remoteAddr
         -- TODO playerId should be conncted to other stuff
-        playerId <- replicateM 8 $ randomRIO ('a', 'z')
+        playerId <- PlayerId <$> replicateM 8 (randomRIO ('a', 'z'))
         atomically $ writeTChan (communication ^. playerQueue) $ Just playerId
         userCom <- userCommunication communication
         turn userCom playerId soc
