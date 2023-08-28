@@ -93,25 +93,17 @@ finishRound end game = do
             game ^. running . dices
                 & (each %~ (fromIntegral . length))
                 & (at loser_ %~ maybe Nothing (\x -> if x > 1 then Just $ x - 1 else Nothing))
-    pure $
-        game
-            & (finished %~ cons finishedRound)
-            & (running .~ newRoundPunished)
+    pure $ game & (finished %~ cons finishedRound) & (running .~ newRoundPunished)
   where
-    bidValid bid =
-        -- case bid of
-        -- Nothing -> True
-        -- Just (Bid _ val) ->
-        --     game ^.. running . dices . filtered ()
-        (game ^. running . dices . to (length . filter (\x -> maybe False (\b -> x == value b) bid) . concatMap snd . Map.toList))
-            >= fromIntegral (maybe 0 count bid)
+    bidValid (Bid cnt val) =
+        (game ^. running . dices . each & filter (== val) & length) <= fromIntegral cnt
     loser_ =
         case end of
             Invalid x -> x
             Challenger p ->
-                if bidValid (game ^? running . bids . _head)
-                    then p
-                    else fromMaybe (PlayerId "No players?") $ game ^? running . to playingOrder . _head
+                if maybe False bidValid (game ^? running . bids . _head)
+                    then fromMaybe (PlayerId "No players?") $ game ^? running . to playingOrder . _head
+                    else p
     finishedRound = RoundFinished end loser_ -- \$ game ^. running
 
 step :: Map.Map PlayerId Move -> Game -> Rand StdGen Status
