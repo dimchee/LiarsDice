@@ -16,7 +16,9 @@ function delay(time) {
 } 
 
 soc.on('connect', () => {
-    // meta podaci... (name)
+    soc.write(JSON.stringify({
+        name: "AndrijaST"
+    }))
 })
 soc.on('data', async data => {
     const msg = JSON.parse(data.toString());

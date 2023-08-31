@@ -65,6 +65,13 @@ export interface outbound {
 
 #### Client to server
 
+On connecting to server you can send (but don't need to!) your name:
+```ts
+export interface metadata {
+    name: string
+}
+```
+
 If it's your turn:
 ```ts
 export interface inbound {

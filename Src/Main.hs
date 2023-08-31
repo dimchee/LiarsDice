@@ -30,6 +30,12 @@ newtype MoveId = MoveId String deriving (Generic, Show, FromJSON, Eq)
 randomMoveId :: IO MoveId
 randomMoveId = MoveId <$> replicateM 8 (randomRIO ('0', '9'))
 
+newtype ConnectResponse = ConnectResponse PlayerId
+instance FromJSON ConnectResponse where
+    parseJSON (JSON.Object o) =
+        ConnectResponse . PlayerId <$> (o .: "name")
+    parseJSON _ = mzero
+
 data ClientResponse
     = ClientResponse MoveId Move
     | JsonError
@@ -147,9 +153,13 @@ simulate :: Communication -> IO ()
 simulate comm = do
     -- TODO handle empty players, should not happen (`newGame`)
     players <- unfoldM $ do
-        player <- atomically $ readTChan $ comm ^. playerQueue
-        maybe (pure ()) (\p -> putStrLn $ "Player '" ++ show p ++ "' connected") player
-        pure player
+        mplayer <- atomically $ readTChan $ comm ^. playerQueue
+        case mplayer of
+            Just (PlayerId p) -> do
+                putStrLn $ "Player '" ++ p ++ "' connected"
+                randEnd <- replicateM 8 (randomRIO ('a', 'z'))
+                pure $ Just $ PlayerId $ p ++ "_" ++ randEnd
+            Nothing -> pure Nothing
     putStrLn $ "Starting simulation. Connected players: " ++ show players
     -- TODO magic number 5
     initialArena <- evalRandIO $ newArena 5 players
@@ -180,7 +190,11 @@ main = do
     serve (Host "localhost") "8888" $ \(soc, _) -> do
         -- putStrLn $ "Player connected: " ++ show remoteAddr
         -- TODO playerId should be conncted to other stuff
-        playerId <- PlayerId <$> replicateM 8 (randomRIO ('a', 'z'))
+        clientNameWish <- timeout (3 * 1000) (recv soc 1024) -- TODO magic numbers
+        let ConnectResponse playerId = case clientNameWish of
+                Just (Just json) -> fromMaybe (ConnectResponse $ PlayerId "") $ JSON.decodeStrict json
+                _ -> ConnectResponse $ PlayerId ""
+
         atomically $ writeTChan (communication ^. playerQueue) $ Just playerId
         userCom <- userCommunication communication
         handlePlayer userCom playerId soc
