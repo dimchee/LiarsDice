@@ -2,6 +2,12 @@
 
 Simple [Liar's dice](https://www.officialgamerules.org/liarsdice) simulator and bot battleground.
 
+## How to install
+
+If you want to run simulator locally, installing is as simple as:
+```sh
+```
+
 ## How to play manually
 
 `WIP`
