@@ -19,7 +19,10 @@ import GHC.Natural
 import System.Random.Shuffle (shuffleM)
 import Prelude hiding (round)
 
-newtype PlayerId = PlayerId String deriving (Show, Eq, Ord)
+newtype PlayerId = PlayerId String deriving (Eq, Ord)
+instance Show PlayerId where
+    show (PlayerId name) = name
+
 type Count = Natural
 data Face = One | Two | Three | Four | Five | Six
     deriving (Eq, Ord, Enum, Generic, Show, Uniform, UniformRange, Random)
