@@ -13,7 +13,7 @@ jobs:
       - name: Build
         run: nix build
       - name: Move
-        run: mv ./result/bin/LiarsDice liarsdice
+        run: cp ./result/bin/LiarsDice liarsdice
       - name: Release
         uses: "marvinpinto/action-automatic-releases@latest"
         with:
