@@ -11,6 +11,7 @@ import Control.Applicative (Alternative (..))
 import Control.Lens
 import Control.Lens.Extras (is)
 import Control.Monad.Random
+import Data.List (intercalate)
 import Data.Map qualified as Map
 import Data.Maybe
 import Data.Monoid (Sum (..))
@@ -40,6 +41,12 @@ data Move
     | Pass'
     deriving (Generic, Show)
 makePrisms ''Move
+newtype Responses = Responses (Map.Map PlayerId Move)
+instance Show Responses where
+    show (Responses resp) =
+        "\n    [ "
+            ++ intercalate "\n    , " (map (\(pid, move) -> show pid ++ " => " ++ show move) $ Map.toList resp)
+            ++ "\n    ]"
 
 data RoundEnd = Challenger PlayerId | Invalid PlayerId
 makePrisms ''RoundEnd
@@ -109,8 +116,8 @@ finishRound end game = do
                     else p
     finishedRound = RoundFinished end loser_ -- \$ game ^. running
 
-step :: Map.Map PlayerId Move -> Game -> Rand StdGen Status
-step moves game = do
+step :: Responses -> Game -> Rand StdGen Status
+step (Responses moves) game = do
     game' <- stepGame moves game
     pure $ case game' ^. running . to playingOrder of
         [winner] -> Finished game' winner

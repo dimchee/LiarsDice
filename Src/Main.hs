@@ -16,6 +16,7 @@ import Control.Monad.Random
 import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
 import Data.ByteString.Lazy (ByteString)
+import Data.List
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
@@ -125,8 +126,8 @@ handlePlayer comm playerId soc = do
         pure nextMove
     pure ()
 
-collectResponses :: MoveId -> Int -> TChan (PlayerId, ClientResponse) -> IO (Map.Map PlayerId Move)
-collectResponses moveId nrPlayers respCh = go Set.empty Map.empty
+collectResponses :: MoveId -> Int -> TChan (PlayerId, ClientResponse) -> IO Responses
+collectResponses moveId nrPlayers respCh = go Set.empty (Responses Map.empty)
   where
     go ids resps = do
         if Set.size ids == nrPlayers
@@ -135,11 +136,11 @@ collectResponses moveId nrPlayers respCh = go Set.empty Map.empty
                 (playerId, response) <- atomically $ readTChan respCh
                 -- putStrLn $ "Response: " ++ show response
                 go (Set.insert playerId ids) $ addResp playerId response resps
-    addResp :: PlayerId -> ClientResponse -> Map.Map PlayerId Move -> Map.Map PlayerId Move
-    addResp playerId resp resps =
+    addResp :: PlayerId -> ClientResponse -> Responses -> Responses
+    addResp playerId resp (Responses resps) =
         if resp ^? _ClientResponse . _1 == Just moveId
-            then resps & at playerId .~ (resp ^? _ClientResponse . _2)
-            else resps
+            then resps & at playerId .~ (resp ^? _ClientResponse . _2) & Responses
+            else Responses resps
 
 -- TODO Use https://wiki.haskell.org/State_Monad for SimulateState
 simulate :: Communication -> IO ()
