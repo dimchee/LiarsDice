@@ -1,23 +1,37 @@
 {
   "nodes": {
     "nixpkgs": {
+      "flake": false,
       "locked": {
-        "lastModified": 1692021667,
-        "narHash": "sha256-PiRT7xDBNBzdx0iCEKt7nb/NBA0xdT3/YOw24AJyvU8=",
-        "owner": "nixos",
-        "repo": "nixpkgs",
-        "rev": "02ea30a16145ee4e139eccda769e22b336999ccc",
-        "type": "github"
+        "narHash": "sha256-dhriG/Uq73gwdNuCbjxEnFD60DyAuIH1YAj5rERrHIM=",
+        "type": "tarball",
+        "url": "https://github.com/nh2/nixpkgs/archive/9e49f8f1f37bc906cda1adb33064c325d760819a.tar.gz"
       },
       "original": {
-        "owner": "nixos",
-        "repo": "nixpkgs",
-        "type": "github"
+        "type": "tarball",
+        "url": "https://github.com/nh2/nixpkgs/archive/9e49f8f1f37bc906cda1adb33064c325d760819a.tar.gz"
       }
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "static-haskell-nix": "static-haskell-nix"
+      }
+    },
+    "static-haskell-nix": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1689279840,
+        "narHash": "sha256-0xZIgywfj+XRKXPISxVz/HS+cwtiJmql/LKrlMEhwcE=",
+        "owner": "nh2",
+        "repo": "static-haskell-nix",
+        "rev": "88f1e2d57e3f4cd6d980eb3d8f99d5e60040ad54",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nh2",
+        "repo": "static-haskell-nix",
+        "type": "github"
       }
     }
   },
