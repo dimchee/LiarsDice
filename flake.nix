@@ -18,30 +18,32 @@
       compiler = "ghc927";
       name = "LiarsDice";
       system = "x86_64-linux";
-      overlay = self: super: {
-        haskell = super.haskell // {
-          packages = super.haskell.packages // {
-            ${compiler} = super.haskell.packages.${compiler}.override {
-              overrides = final: prev: {${name} = prev.callCabal2nix name ./. { };};
+      overlays = [ 
+        (self: super: {
+          haskell = super.haskell // {
+            packages = super.haskell.packages // {
+              ${compiler} = super.haskell.packages.${compiler}.override {
+                overrides = final: prev: {${name} = prev.callCabal2nix name ./. { };};
+              };
             };
           };
-        };
-      };
-      overlays = [overlay];
+        })
+      ];
       normalPkgs = import nixpkgs {inherit overlays system; };
+      haskellPackages = normalPkgs.haskell.packages.${compiler};
       survey = import "${static-haskell-nix}/survey" { inherit compiler normalPkgs; };
     in
       {
         packages.${system}.default = survey.haskellPackages.${name};
-        # devShell.${system} = normalPkgs.mkShell {
-        #   nativeBuildInputs = (survey.haskellPackages.callCabal2nix name ./. {}).nativeBuildInputs;
-        #   buildInputs = 
-        #   (survey.haskellPackages.callCabal2nix name ./. {}).buildInputs ++
-        #   [
-        #     normalPkgs.haskellPackages.cabal-fmt
-        #     normalPkgs.haskellPackages.haskell-language-server
-        #     normalPkgs.haskellPackages.fast-tags
-        #   ];
-        # };
+        devShell.${system} = normalPkgs.mkShell {
+          inputsFrom = [
+            (haskellPackages.callCabal2nix name ./. {}).env
+          ];
+          buildInputs = [
+            haskellPackages.cabal-fmt
+            haskellPackages.fast-tags
+            haskellPackages.haskell-language-server
+          ];
+        };
       };
 }
