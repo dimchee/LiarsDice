@@ -17,7 +17,7 @@ function delay(time) {
 
 soc.on('connect', () => {
     soc.write(JSON.stringify({
-        name: "AndrijaST"
+        name: process.argv.slice(2)[0]
     }))
 })
 soc.on('data', async data => {
