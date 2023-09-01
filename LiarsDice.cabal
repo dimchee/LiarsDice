@@ -9,11 +9,11 @@ author:        dimchee
 maintainer:    dimchee90@gmail.com
 build-type:    Simple
 
-common warnings
-    ghc-options: -Wall
+common options
+    ghc-options: -Wall -O2
 
 executable LiarsDice
-    import:           warnings
+    import:           options
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
