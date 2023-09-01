@@ -17,6 +17,7 @@ import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
 import Data.ByteString.Lazy (ByteString)
 import Data.List
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
@@ -30,10 +31,10 @@ newtype MoveId = MoveId String deriving (Generic, Show, FromJSON, Eq)
 randomMoveId :: IO MoveId
 randomMoveId = MoveId <$> replicateM 8 (randomRIO ('0', '9'))
 
-newtype ConnectResponse = ConnectResponse PlayerId
-instance FromJSON ConnectResponse where
+newtype NameResponse = NameResponse String
+instance FromJSON NameResponse where
     parseJSON (JSON.Object o) =
-        ConnectResponse . PlayerId <$> (o .: "name")
+        NameResponse <$> (o .: "name")
     parseJSON _ = mzero
 
 data ClientResponse
@@ -64,7 +65,7 @@ data Arena = Arena
     , _runningGame :: Game
     }
 makeLenses ''Arena
-newArena :: Count -> [PlayerId] -> Rand StdGen Arena
+newArena :: Count -> NonEmpty PlayerId -> Rand StdGen Arena
 newArena diceNumber players = Arena [] <$> newGame diceNumber players
 
 data Communication = Communication
@@ -151,33 +152,38 @@ collectResponses moveId nrPlayers respCh = go Set.empty (Responses Map.empty)
 -- TODO Use https://wiki.haskell.org/State_Monad for SimulateState
 simulate :: Communication -> IO ()
 simulate comm = do
-    -- TODO handle empty players, should not happen (`newGame`)
     players <- unfoldM $ do
         mplayer <- atomically $ readTChan $ comm ^. playerQueue
-        case mplayer of
-            Just (PlayerId p) -> do
-                putStrLn $ "Player '" ++ p ++ "' connected"
-                randEnd <- replicateM 8 (randomRIO ('a', 'z'))
-                pure $ Just $ PlayerId $ p ++ "_" ++ randEnd
-            Nothing -> pure Nothing
-    putStrLn $ "Starting simulation. Connected players: " ++ show players
-    -- TODO magic number 5
-    initialArena <- evalRandIO $ newArena 5 players
-    tVarArena <- newTVarIO initialArena
-    Finished _ playerId <- iterateWhile (is _Running) $ do
-        moveId <- randomMoveId
-        arena <- readTVarIO tVarArena
-        atomically $ writeTChan (comm ^. nextMoveChan) $ Just (moveId, arena)
-        let activePlayers = arena ^. runningGame . running . to playingOrder . to length
-        responses <- collectResponses moveId activePlayers $ comm ^. respChan
-        putStrLn $ "Responses: " ++ show responses
-        -- randomId <- randomIO
-        status <- evalRandIO $ arena ^. runningGame . to (step responses)
-        atomically $ writeTVar tVarArena (arena & runningGame .~ getGame status)
-        pure status
-    putStrLn $ "Winner: " ++ show playerId
-    atomically $ writeTChan (comm ^. nextMoveChan) Nothing
-    pure ()
+        maybe (pure ()) (\p -> putStrLn $ "Player '" ++ show p ++ "' connected") mplayer
+        pure mplayer
+    case players of
+        [] -> putStrLn "No players connected, Aborting simulation"
+        p : ps -> do
+            putStrLn $ "Starting simulation. Connected players: " ++ show (p : ps)
+            initialArena <- evalRandIO $ newArena 5 (p :| ps) -- TODO magic number 5
+            tVarArena <- newTVarIO initialArena
+            Finished _ playerId <- iterateWhile (is _Running) $ do
+                moveId <- randomMoveId
+                arena <- readTVarIO tVarArena
+                atomically $ writeTChan (comm ^. nextMoveChan) $ Just (moveId, arena)
+                let activePlayers = arena ^. runningGame . running . to playingOrder . to length
+                responses <- collectResponses moveId activePlayers $ comm ^. respChan
+                putStrLn $ "Responses: " ++ show responses
+                putStrLn $ "ActiveRound: " ++ (show $ arena ^. runningGame . running)
+                status <- evalRandIO $ arena ^. runningGame . to (step responses)
+                atomically $ writeTVar tVarArena (arena & runningGame .~ getGame status)
+                pure status
+            putStrLn $ "Winner: " ++ show playerId
+            atomically $ writeTChan (comm ^. nextMoveChan) Nothing
+            pure ()
+
+newPlayerId :: Maybe NameResponse -> IO PlayerId
+newPlayerId mConnectResponse = do
+    randEnd <- replicateM 8 (randomRIO ('a', 'z'))
+    pure $ PlayerId $ case mConnectResponse of
+        Just (NameResponse p) -> do
+            p ++ "_" ++ randEnd
+        Nothing -> randEnd
 
 main :: IO ()
 main = do
@@ -187,13 +193,10 @@ main = do
     _ <- forkIO $ serve (Host "localhost") "9000" $ \(_, _) -> do
         atomically $ writeTChan (communication ^. playerQueue) Nothing
     _ <- forkIO $ simulate communication
+    -- TODO stop serving when game is over
     serve (Host "localhost") "8888" $ \(soc, _) -> do
-        -- putStrLn $ "Player connected: " ++ show remoteAddr
-        -- TODO playerId should be conncted to other stuff
         clientNameWish <- timeout (3 * 1000) (recv soc 1024) -- TODO magic numbers
-        let ConnectResponse playerId = case clientNameWish of
-                Just (Just json) -> fromMaybe (ConnectResponse $ PlayerId "") $ JSON.decodeStrict json
-                _ -> ConnectResponse $ PlayerId ""
+        playerId <- newPlayerId (JSON.decodeStrict =<< join clientNameWish)
 
         atomically $ writeTChan (communication ^. playerQueue) $ Just playerId
         userCom <- userCommunication communication

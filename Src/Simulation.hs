@@ -12,6 +12,7 @@ import Control.Lens
 import Control.Lens.Extras (is)
 import Control.Monad.Random
 import Data.List (intercalate)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
 import Data.Maybe
 import Data.Monoid (Sum (..))
@@ -55,6 +56,7 @@ data Round = Round
     , _dices :: Map.Map PlayerId Dice
     , _bids :: [Bid]
     }
+    deriving (Show)
 makeLenses ''Round
 type RoundRunning = Round
 data RoundFinished = RoundFinished
@@ -84,8 +86,8 @@ generateDice = mapM (\x -> replicateM (fromIntegral x) getRandom)
 newRound :: Map.Map PlayerId Count -> Rand StdGen Round
 newRound diceCounts = Round <$> shuffleM (Map.keys diceCounts) <*> generateDice diceCounts <*> pure []
 
-newGame :: Count -> [PlayerId] -> Rand StdGen Game
-newGame diceNumber players = Game [] <$> newRound (Map.fromList $ (,diceNumber) <$> players)
+newGame :: Count -> NonEmpty PlayerId -> Rand StdGen Game
+newGame diceNumber (p :| players) = Game [] <$> newRound (Map.fromList $ (,diceNumber) <$> p : players)
 
 moveNumber :: Round -> Sum Int
 moveNumber round = round ^. bids . to length . to Sum
