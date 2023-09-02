@@ -18,8 +18,6 @@ jobs:
         run: nix build
       - name: Move
         run: cp ./result/bin/LiarsDice liarsdice
-      - name: Make Executable
-        run: chmod +x liarsdice
       - name: Release
         uses: "marvinpinto/action-automatic-releases@latest"
         with:

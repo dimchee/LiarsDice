@@ -7,6 +7,7 @@ Simple [Liar's dice](https://www.officialgamerules.org/liarsdice) simulator and 
 If you want to run simulator locally, installing is as simple as:
 ```sh
 wget https://github.com/dimchee/LiarsDice/releases/download/latest/liarsdice
+chmod +x liarsdice
 ```
 Now you can run server with:
 ```sh
