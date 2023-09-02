@@ -169,7 +169,7 @@ simulate comm = do
                 let activePlayers = arena ^. runningGame . running . to playingOrder . to length
                 responses <- collectResponses moveId activePlayers $ comm ^. respChan
                 putStrLn $ "Responses: " ++ show responses
-                putStrLn $ "ActiveRound: " ++ (show $ arena ^. runningGame . running)
+                putStrLn $ "ActiveRound: " ++ show (arena ^. runningGame . running)
                 status <- evalRandIO $ arena ^. runningGame . to (step responses)
                 atomically $ writeTVar tVarArena (arena & runningGame .~ getGame status)
                 pure status
@@ -188,8 +188,9 @@ newPlayerId mConnectResponse = do
 main :: IO ()
 main = do
     communication <- newCommunication
-    putStrLn "Starting server..."
-    putStrLn "Waiting for players, to start round run 'curl -s localhost:9000'"
+    putStrLn "Waiting for players"
+    putStrLn "Connect as bot at 'localhost:8888'"
+    putStrLn "To start round run 'curl -s localhost:9000'"
     _ <- forkIO $ serve (Host "localhost") "9000" $ \(_, _) -> do
         atomically $ writeTChan (communication ^. playerQueue) Nothing
     _ <- forkIO $ simulate communication
