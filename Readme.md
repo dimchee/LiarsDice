@@ -42,7 +42,7 @@ type PlayerID = string;
 type Face = 1 | 2 | 3 | 4 | 5 | 6;
 type Count = Integer;
 type Bid = [Face, Count];
-type EmptyBid = [0, 0];
+type EmptyBid = [1, 0];
 ```
 
 #### Server to client
