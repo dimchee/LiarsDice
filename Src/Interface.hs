@@ -9,29 +9,51 @@ import Control.Monad
 import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
 import Data.ByteString.Lazy (ByteString)
+import Data.List qualified as List
 import Data.Map qualified as Map
 import GHC.Generics (Generic)
+import Network.Simple.TCP (Socket, recv)
 import Simulation
+import System.Timeout (timeout)
 import Prelude hiding (round)
 
-newtype MoveId = MoveId String deriving (Generic, Show, FromJSON, Eq)
-newtype NameResponse = NameResponse String
-instance FromJSON NameResponse where
-    parseJSON (JSON.Object o) =
-        NameResponse <$> (o .: "name")
-    parseJSON _ = mzero
-
-data ClientResponse
-    = ClientResponse MoveId Move
+data ClientResponse content
+    = ClientResponse content
     | JsonError
     | TimedOut
     | EndOfInput
     deriving (Show)
 makePrisms ''ClientResponse
 
-instance FromJSON ClientResponse where
+timedRecv :: JSON.FromJSON a => Socket -> IO (ClientResponse a)
+timedRecv soc =
+    maybe TimedOut (maybe EndOfInput (maybe JsonError ClientResponse . JSON.decodeStrict))
+        -- TOOD magic numbers
+        <$> timeout (3 * 1000000) (recv soc 1024)
+
+newtype PlayerId = PlayerId String deriving (Eq, Ord, JSON.ToJSON, JSON.ToJSONKey)
+instance Show PlayerId where
+    show (PlayerId name) = name
+
+instance Show (Responses PlayerId) where
+    show (Responses resp) =
+        "\n    [ "
+            ++ List.intercalate "\n    , " (map (\(pid, move) -> show pid ++ " => " ++ show move) $ Map.toList resp)
+            ++ "\n    ]"
+
+newtype MoveId = MoveId String deriving (Generic, Show, FromJSON, Eq)
+newtype NameWish = NameWish String
+instance FromJSON NameWish where
     parseJSON (JSON.Object o) =
-        ClientResponse
+        NameWish <$> (o .: "name")
+    parseJSON _ = mzero
+
+data MoveChecked = MoveChecked MoveId Move
+makePrisms ''MoveChecked
+
+instance FromJSON MoveChecked where
+    parseJSON (JSON.Object o) =
+        MoveChecked
             <$> o
             .: "message_id"
             <*> ((o .: "move" >>= stringMove) <|> (bidMove <$> o .: "move"))
@@ -46,7 +68,27 @@ instance FromJSON ClientResponse where
 
 type GameNumber = Int
 
-serverResponse :: GameNumber -> Game -> MoveId -> PlayerId -> ByteString
+instance JSON.ToJSON (Game PlayerId) where
+    toJSON game =
+        JSON.object
+            [ "winner" .= (game ^? running . to playingOrder . _head)
+            , "rounds" .= (encodeRound <$> game ^. finished)
+            ]
+      where
+        encodeRoundEnd rend = case rend of
+            Challenger pid -> JSON.object ["challenger" .= pid]
+            Invalid pid -> JSON.object ["invalid" .= pid]
+        encodeBid bid = (fromEnum $ value bid, count bid)
+        encodeRound round =
+            JSON.object
+                [ "loser" .= (round ^. loser)
+                , "initialPlayingOrder" .= (round ^. getRound . initialPlayingOrder)
+                , "dices" .= Map.map (fmap fromEnum) (round ^. getRound . dices)
+                , "bids" .= (encodeBid <$> round ^. getRound . bids)
+                , "roundEnd" .= encodeRoundEnd (round ^. roundEnd)
+                ]
+
+serverResponse :: GameNumber -> Game PlayerId -> MoveId -> PlayerId -> ByteString
 serverResponse gameNumber game moveId playerId = do
     JSON.encode $
         JSON.object

@@ -12,29 +12,26 @@ import Control.Lens hiding ((.=))
 import Control.Lens.Extras (is)
 import Control.Monad.Loops (iterateWhile, unfoldM)
 import Control.Monad.Random
-import Data.Aeson qualified as JSON
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Interface
 import Network.Simple.TCP
 import Simulation
-import System.Timeout (timeout)
 
 randomMoveId :: IO MoveId
 randomMoveId = MoveId <$> replicateM 8 (randomRIO ('0', '9'))
 
 data Arena = Arena
-    { _finishedGames :: [Game]
-    , _runningGame :: Game
+    { _finishedGames :: [Game PlayerId]
+    , _runningGame :: Game PlayerId
     }
 makeLenses ''Arena
 newArena :: Count -> NonEmpty PlayerId -> Rand StdGen Arena
 newArena diceNumber players = Arena [] <$> newGame diceNumber players
 
 data Communication = Communication
-    { _respChan :: TChan (PlayerId, ClientResponse)
+    { _respChan :: TChan (PlayerId, ClientResponse MoveChecked)
     , _nextMoveChan :: TChan (Maybe (MoveId, Arena))
     , _playerQueue :: TChan (Maybe PlayerId)
     }
@@ -59,18 +56,18 @@ handlePlayer comm playerId soc = do
                     (arena ^. runningGame)
                     moveId
                     playerId
-            clientResponse <- timeout (3 * 1000000) (recv soc 1024) -- TODO magic numbers
+            clientResponse <- timedRecv soc
             -- putStrLn $ "Player responded: " ++ show clientResponse
             atomically $
                 writeTChan
                     (comm ^. respChan)
                     ( playerId
-                    , maybe TimedOut (maybe EndOfInput (fromMaybe JsonError . JSON.decodeStrict)) clientResponse
+                    , clientResponse
                     )
         pure nextMove
     pure ()
 
-collectResponses :: MoveId -> Int -> TChan (PlayerId, ClientResponse) -> IO Responses
+collectResponses :: MoveId -> Int -> TChan (PlayerId, ClientResponse MoveChecked) -> IO (Responses PlayerId)
 collectResponses moveId nrPlayers respCh = go Set.empty (Responses Map.empty)
   where
     go ids resps = do
@@ -80,10 +77,10 @@ collectResponses moveId nrPlayers respCh = go Set.empty (Responses Map.empty)
                 (playerId, response) <- atomically $ readTChan respCh
                 -- putStrLn $ "Response: " ++ show response
                 go (Set.insert playerId ids) $ addResp playerId response resps
-    addResp :: PlayerId -> ClientResponse -> Responses -> Responses
+    addResp :: PlayerId -> ClientResponse MoveChecked -> Responses PlayerId -> Responses PlayerId
     addResp playerId resp (Responses resps) =
-        if resp ^? _ClientResponse . _1 == Just moveId
-            then resps & at playerId .~ (resp ^? _ClientResponse . _2) & Responses
+        if resp ^? _ClientResponse . _MoveChecked . _1 == Just moveId
+            then resps & at playerId .~ (resp ^? _ClientResponse . _MoveChecked . _2) & Responses
             else Responses resps
 
 -- TODO Use https://wiki.haskell.org/State_Monad for SimulateState
@@ -114,13 +111,13 @@ simulate comm = do
             atomically $ writeTChan (comm ^. nextMoveChan) Nothing
             pure ()
 
-newPlayerId :: Maybe NameResponse -> IO PlayerId
+newPlayerId :: ClientResponse NameWish -> IO PlayerId
 newPlayerId mConnectResponse = do
     randEnd <- replicateM 8 (randomRIO ('a', 'z'))
     pure $ PlayerId $ case mConnectResponse of
-        Just (NameResponse p) -> do
+        ClientResponse (NameWish p) -> do
             p ++ "_" ++ randEnd
-        Nothing -> randEnd
+        _ -> randEnd
 
 main :: IO ()
 main = do
@@ -133,9 +130,7 @@ main = do
     _ <- forkIO $ simulate communication
     -- TODO stop serving when game is over
     serve (Host "localhost") "8888" $ \(soc, _) -> do
-        clientNameWish <- timeout (3 * 1000) (recv soc 1024) -- TODO magic numbers
-        playerId <- newPlayerId (JSON.decodeStrict =<< join clientNameWish)
-
+        playerId <- timedRecv soc >>= newPlayerId
         atomically $ writeTChan (communication ^. playerQueue) $ Just playerId
         userCom <- userCommunication communication
         handlePlayer userCom playerId soc

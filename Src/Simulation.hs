@@ -9,7 +9,6 @@ import Control.Applicative (Alternative (..))
 import Control.Lens
 import Control.Lens.Extras (is)
 import Control.Monad.Random
-import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
 import Data.Maybe
@@ -18,10 +17,6 @@ import GHC.Natural
 import System.Random.Shuffle (shuffleM)
 import System.Random.Stateful (uniformRM)
 import Prelude hiding (round)
-
-newtype PlayerId = PlayerId String deriving (Eq, Ord)
-instance Show PlayerId where
-    show (PlayerId name) = name
 
 type Count = Natural
 data Face = One | Two | Three | Four | Five | Six
@@ -35,7 +30,7 @@ data Bid = Bid
     { count :: Count
     , value :: Face
     }
-    deriving (Show)
+    deriving (Show, Generic)
 
 data Move
     = Bid' Bid
@@ -43,60 +38,55 @@ data Move
     | Pass'
     deriving (Generic, Show)
 makePrisms ''Move
-newtype Responses = Responses (Map.Map PlayerId Move)
-instance Show Responses where
-    show (Responses resp) =
-        "\n    [ "
-            ++ intercalate "\n    , " (map (\(pid, move) -> show pid ++ " => " ++ show move) $ Map.toList resp)
-            ++ "\n    ]"
+newtype Responses playerId = Responses (Map.Map playerId Move)
 
-data RoundEnd = Challenger PlayerId | Invalid PlayerId
+data RoundEnd playerId = Challenger playerId | Invalid playerId
 makePrisms ''RoundEnd
-data Round = Round
-    { _initialPlayingOrder :: [PlayerId]
-    , _dices :: Map.Map PlayerId Dice
+data Round playerId = Round
+    { _initialPlayingOrder :: [playerId]
+    , _dices :: Map.Map playerId Dice
     , _bids :: [Bid]
     }
-    deriving (Show)
+    deriving (Show, Generic)
 makeLenses ''Round
 type RoundRunning = Round
-data RoundFinished = RoundFinished
-    { _roundEnd :: RoundEnd
-    , _loser :: PlayerId
-    , _getRound :: Round
+data RoundFinished playerId = RoundFinished
+    { _roundEnd :: RoundEnd playerId
+    , _loser :: playerId
+    , _getRound :: Round playerId
     }
 makeLenses ''RoundFinished
 
-data Game = Game
-    { _finished :: [RoundFinished]
-    , _running :: RoundRunning
+data Game playerId = Game
+    { _finished :: [RoundFinished playerId]
+    , _running :: RoundRunning playerId
     }
 makeLenses ''Game
 
-data Status = Running Game | Finished Game PlayerId
+data Status playerId = Running (Game playerId) | Finished (Game playerId) playerId
 makePrisms ''Status
 
-newRound :: Map.Map PlayerId Count -> Rand StdGen Round
+newRound :: Map.Map playerId Count -> Rand StdGen (Round playerId)
 newRound diceCounts = Round <$> shuffleM (Map.keys diceCounts) <*> generateDice diceCounts <*> pure []
-newGame :: Count -> NonEmpty PlayerId -> Rand StdGen Game
+newGame :: Ord playerId => Count -> NonEmpty playerId -> Rand StdGen (Game playerId)
 newGame diceNumber (p :| players) = Game [] <$> newRound (Map.fromList $ (,diceNumber) <$> p : players)
 
-getGame :: Status -> Game
+getGame :: Status playerId -> Game playerId
 getGame stats = case stats of
     Running game -> game
     Finished game _ -> game
 
-generateDice :: Map.Map PlayerId Count -> Rand StdGen (Map.Map PlayerId Dice)
+generateDice :: Map.Map playerId Count -> Rand StdGen (Map.Map playerId Dice)
 generateDice = mapM (\x -> replicateM (fromIntegral x) getRandom)
 
-playingOrder :: Round -> [PlayerId]
+playingOrder :: Round playerId -> [playerId]
 playingOrder round = waitingToPlay ++ played
   where
     initialOrder = round ^. initialPlayingOrder
     moveNumber = round ^. bids . to length
     (played, waitingToPlay) = splitAt (moveNumber `mod` length initialOrder) initialOrder
 
-finishRound :: RoundEnd -> Game -> Rand StdGen Game
+finishRound :: Ord playerId => RoundEnd playerId -> Game playerId -> Rand StdGen (Game playerId)
 finishRound end game = do
     newRoundPunished <-
         newRound $
@@ -112,18 +102,18 @@ finishRound end game = do
             Invalid x -> x
             Challenger p ->
                 if maybe False bidValid (game ^? running . bids . _head)
-                    then fromMaybe (PlayerId "No players?") $ game ^? running . to playingOrder . _head
+                    then fromMaybe (error "No players?") $ game ^? running . to playingOrder . _head
                     else p
     finishedRound = RoundFinished end loser_ $ game ^. running
 
-step :: Responses -> Game -> Rand StdGen Status
+step :: Ord playerId => Responses playerId -> Game playerId -> Rand StdGen (Status playerId)
 step (Responses moves) game = do
     game' <- stepGame moves game
     pure $ case game' ^. running . to playingOrder of
         [winner] -> Finished game' winner
         _ -> Running game'
 
-stepGame :: Map.Map PlayerId Move -> Game -> Rand StdGen Game
+stepGame :: Ord playerId => Map.Map playerId Move -> Game playerId -> Rand StdGen (Game playerId)
 stepGame moves game = case maybeRoundEnd of
     Just end ->
         finishRound end game
