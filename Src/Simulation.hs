@@ -2,8 +2,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
--- TODO delete this option
-{-# OPTIONS_GHC -Wno-missing-methods #-}
 
 module Simulation where
 
@@ -19,6 +17,7 @@ import Data.Monoid (Sum (..))
 import GHC.Generics (Generic)
 import GHC.Natural
 import System.Random.Shuffle (shuffleM)
+import System.Random.Stateful (uniformRM)
 import Prelude hiding (round)
 
 newtype PlayerId = PlayerId String deriving (Eq, Ord)
@@ -27,7 +26,10 @@ instance Show PlayerId where
 
 type Count = Natural
 data Face = One | Two | Three | Four | Five | Six
-    deriving (Eq, Ord, Enum, Generic, Show, Uniform, UniformRange, Random)
+    deriving (Eq, Ord, Enum, Generic, Show, Uniform, Random)
+instance UniformRange Face where
+    uniformRM (a, b) = fmap toEnum . uniformRM (fromEnum a, fromEnum b)
+
 type Dice = [Face]
 
 data Bid = Bid

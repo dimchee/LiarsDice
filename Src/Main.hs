@@ -101,7 +101,7 @@ serverResponse arena moveId playerId = do
             , "last_move" .= ("first_move" :: String)
             , "last_bid"
                 .= maybe
-                    (0, 0)
+                    emptyBid
                     (\bid -> (fromEnum $ value bid, count bid))
                     (round ^? bids . _head)
             , "last_bidder" .= maybeNotAvailable (round ^? to playingOrder . _head)
@@ -114,6 +114,7 @@ serverResponse arena moveId playerId = do
     unwrapMove (MoveId m) = m
     unwrap (PlayerId p) = p
     yourself = PlayerId "yourself"
+    emptyBid = (1, 0)
     maybeNotAvailable = maybe "not_available" unwrap
 
 handlePlayer :: Communication -> PlayerId -> Socket -> IO ()
