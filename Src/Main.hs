@@ -6,59 +6,24 @@ module Main where
 
 -- import Debug.Trace (trace)
 
-import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM
 import Control.Lens hiding ((.=))
 import Control.Lens.Extras (is)
 import Control.Monad.Loops (iterateWhile, unfoldM)
 import Control.Monad.Random
-import Data.Aeson (FromJSON, (.:), (.=))
 import Data.Aeson qualified as JSON
-import Data.ByteString.Lazy (ByteString)
-import Data.List
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
-import GHC.Generics (Generic)
+import Interface
 import Network.Simple.TCP
 import Simulation
 import System.Timeout (timeout)
-import Prelude hiding (round)
 
-newtype MoveId = MoveId String deriving (Generic, Show, FromJSON, Eq)
 randomMoveId :: IO MoveId
 randomMoveId = MoveId <$> replicateM 8 (randomRIO ('0', '9'))
-
-newtype NameResponse = NameResponse String
-instance FromJSON NameResponse where
-    parseJSON (JSON.Object o) =
-        NameResponse <$> (o .: "name")
-    parseJSON _ = mzero
-
-data ClientResponse
-    = ClientResponse MoveId Move
-    | JsonError
-    | TimedOut
-    | EndOfInput
-    deriving (Show)
-makePrisms ''ClientResponse
-
-instance FromJSON ClientResponse where
-    parseJSON (JSON.Object o) =
-        ClientResponse
-            <$> o
-            .: "message_id"
-            <*> ((o .: "move" >>= stringMove) <|> (bidMove <$> o .: "move"))
-      where
-        stringMove x = case x of
-            "pass" -> pure Pass'
-            "challenge" -> pure Challenge'
-            s -> fail $ "Should be one of 'challenge' or 'pass', not: '" <> s <> "'"
-        bidMove :: (Int, Int) -> Move
-        bidMove (face, count) = Bid' $ Bid{count = fromIntegral count, value = toEnum $ face - 1}
-    parseJSON _ = mzero
 
 data Arena = Arena
     { _finishedGames :: [Game]
@@ -83,46 +48,17 @@ userCommunication com = do
     nextMove <- atomically $ dupTChan (com ^. nextMoveChan)
     pure $ com & nextMoveChan .~ nextMove
 
-serverResponse :: Arena -> MoveId -> PlayerId -> ByteString
-serverResponse arena moveId playerId = do
-    JSON.encode $
-        JSON.object
-            [ "message_id" .= unwrapMove moveId
-            , "game_number" .= (arena ^. finishedGames . to length)
-            , "round_number" .= (game ^. finished . to length)
-            , "move_number" .= (round ^. bids . to length)
-            , "your_hand" .= maybe [] (map $ (+ 1) . fromEnum) (round ^. dices . at playerId)
-            , "other_hands"
-                .= ( round ^. dices . to Map.toList
-                        & (each . _2 %~ length)
-                        & (each . filtered ((== playerId) . fst) . _1 .~ yourself)
-                        & (each . _1 %~ unwrap)
-                   )
-            , "last_move" .= ("first_move" :: String)
-            , "last_bid"
-                .= maybe
-                    emptyBid
-                    (\bid -> (fromEnum $ value bid, count bid))
-                    (round ^? bids . _head)
-            , "last_bidder" .= maybeNotAvailable (round ^? to playingOrder . _head)
-            , "last_loser" .= maybeNotAvailable (game ^? finished . _head . loser)
-            , "last_challenger" .= maybeNotAvailable (game ^? finished . _head . roundEnd . _Challenger)
-            ]
-  where
-    game = arena ^. runningGame
-    round = game ^. running
-    unwrapMove (MoveId m) = m
-    unwrap (PlayerId p) = p
-    yourself = PlayerId "yourself"
-    emptyBid = (1, 0)
-    maybeNotAvailable = maybe "not_available" unwrap
-
 handlePlayer :: Communication -> PlayerId -> Socket -> IO ()
 handlePlayer comm playerId soc = do
     _ <- iterateWhile (is _Just) $ do
         nextMove <- atomically $ readTChan $ comm ^. nextMoveChan
-        flip (maybe (pure ())) nextMove $ \(moveId, game) -> do
-            sendLazy soc $ serverResponse game moveId playerId
+        flip (maybe (pure ())) nextMove $ \(moveId, arena) -> do
+            sendLazy soc $
+                serverResponse
+                    (arena ^. finishedGames . to length)
+                    (arena ^. runningGame)
+                    moveId
+                    playerId
             clientResponse <- timeout (3 * 1000000) (recv soc 1024) -- TODO magic numbers
             -- putStrLn $ "Player responded: " ++ show clientResponse
             atomically $

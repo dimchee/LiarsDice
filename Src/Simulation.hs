@@ -13,7 +13,6 @@ import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
 import Data.Maybe
-import Data.Monoid (Sum (..))
 import GHC.Generics (Generic)
 import GHC.Natural
 import System.Random.Shuffle (shuffleM)
@@ -64,7 +63,7 @@ type RoundRunning = Round
 data RoundFinished = RoundFinished
     { _roundEnd :: RoundEnd
     , _loser :: PlayerId
-    -- , _getRound :: Round
+    , _getRound :: Round
     }
 makeLenses ''RoundFinished
 
@@ -74,9 +73,13 @@ data Game = Game
     }
 makeLenses ''Game
 
--- data Status m end = Running m | Finished m end
 data Status = Running Game | Finished Game PlayerId
 makePrisms ''Status
+
+newRound :: Map.Map PlayerId Count -> Rand StdGen Round
+newRound diceCounts = Round <$> shuffleM (Map.keys diceCounts) <*> generateDice diceCounts <*> pure []
+newGame :: Count -> NonEmpty PlayerId -> Rand StdGen Game
+newGame diceNumber (p :| players) = Game [] <$> newRound (Map.fromList $ (,diceNumber) <$> p : players)
 
 getGame :: Status -> Game
 getGame stats = case stats of
@@ -85,20 +88,13 @@ getGame stats = case stats of
 
 generateDice :: Map.Map PlayerId Count -> Rand StdGen (Map.Map PlayerId Dice)
 generateDice = mapM (\x -> replicateM (fromIntegral x) getRandom)
-newRound :: Map.Map PlayerId Count -> Rand StdGen Round
-newRound diceCounts = Round <$> shuffleM (Map.keys diceCounts) <*> generateDice diceCounts <*> pure []
 
-newGame :: Count -> NonEmpty PlayerId -> Rand StdGen Game
-newGame diceNumber (p :| players) = Game [] <$> newRound (Map.fromList $ (,diceNumber) <$> p : players)
-
-moveNumber :: Round -> Sum Int
-moveNumber round = round ^. bids . to length . to Sum
 playingOrder :: Round -> [PlayerId]
-playingOrder round = round ^. initialPlayingOrder . to (rotate $ moveNumber round)
-rotate :: Sum Int -> [a] -> [a]
-rotate (Sum n) as = ys ++ xs
+playingOrder round = waitingToPlay ++ played
   where
-    (xs, ys) = splitAt (n `mod` length as) as
+    initialOrder = round ^. initialPlayingOrder
+    moveNumber = round ^. bids . to length
+    (played, waitingToPlay) = splitAt (moveNumber `mod` length initialOrder) initialOrder
 
 finishRound :: RoundEnd -> Game -> Rand StdGen Game
 finishRound end game = do
@@ -118,7 +114,7 @@ finishRound end game = do
                 if maybe False bidValid (game ^? running . bids . _head)
                     then fromMaybe (PlayerId "No players?") $ game ^? running . to playingOrder . _head
                     else p
-    finishedRound = RoundFinished end loser_ -- \$ game ^. running
+    finishedRound = RoundFinished end loser_ $ game ^. running
 
 step :: Responses -> Game -> Rand StdGen Status
 step (Responses moves) game = do
