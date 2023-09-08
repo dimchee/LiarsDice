@@ -26,8 +26,14 @@ soc.on('data', async data => {
     let pass = () => respond("pass")
     let challenge = () => respond("challenge")
     let bid = (x) => respond([x.value, x.count])
-    log(msg);
-    bid({ count: 5, value: 4 })
+
+    // log(msg);
+    log(msg)
+    if(msg.other_hands[0][0] == "yourself") {
+        bid({ count: 5, value: 4 })
+    } else {
+        pass()
+    }
     // await delay(1000)
     // respond("challenge")
 })

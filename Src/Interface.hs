@@ -25,6 +25,11 @@ data ClientResponse content
     deriving (Show)
 makePrisms ''ClientResponse
 
+instance Show (Status PlayerId) where
+    show st = case st of
+        Finished _ pid -> "Finished " ++ show pid
+        Running _ -> "Running"
+
 timedRecv :: JSON.FromJSON a => Socket -> IO (ClientResponse a)
 timedRecv soc =
     maybe TimedOut (maybe EndOfInput (maybe JsonError ClientResponse . JSON.decodeStrict))
@@ -35,11 +40,13 @@ newtype PlayerId = PlayerId String deriving (Eq, Ord, JSON.ToJSON, JSON.ToJSONKe
 instance Show PlayerId where
     show (PlayerId name) = name
 
-instance Show (Responses PlayerId) where
-    show (Responses resp) =
-        "\n    [ "
-            ++ List.intercalate "\n    , " (map (\(pid, move) -> show pid ++ " => " ++ show move) $ Map.toList resp)
-            ++ "\n    ]"
+prettyPrintResponses :: Show a => Responses a -> [Char]
+prettyPrintResponses (Responses resp) =
+    "\n    [ "
+        ++ List.intercalate
+            "\n    , "
+            (map (\(pid, move) -> show pid ++ " => " ++ show move) $ Map.toList resp)
+        ++ "\n    ]"
 
 newtype MoveId = MoveId String deriving (Generic, Show, FromJSON, Eq)
 newtype NameWish = NameWish String
@@ -87,6 +94,8 @@ instance JSON.ToJSON (Game PlayerId) where
                 , "bids" .= (encodeBid <$> round ^. getRound . bids)
                 , "roundEnd" .= encodeRoundEnd (round ^. roundEnd)
                 ]
+getJSON :: Game PlayerId -> ByteString
+getJSON = JSON.encode
 
 serverResponse :: GameNumber -> Game PlayerId -> MoveId -> PlayerId -> ByteString
 serverResponse gameNumber game moveId playerId = do
@@ -98,9 +107,9 @@ serverResponse gameNumber game moveId playerId = do
             , "move_number" .= (round ^. bids . to length)
             , "your_hand" .= maybe [] (map $ (+ 1) . fromEnum) (round ^. dices . at playerId)
             , "other_hands"
-                .= ( round ^. dices . to Map.toList
-                        & (each . _2 %~ length)
-                        & (each . filtered ((== playerId) . fst) . _1 .~ yourself)
+                .= ( byPlayingOrder game (round ^. dices)
+                        & (each . _2 . _Just %~ length)
+                        & (each . _1 . filtered (== playerId) .~ yourself)
                         & (each . _1 %~ unwrap)
                    )
             , "last_move" .= ("first_move" :: String)
